@@ -1,0 +1,40 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+.env
+.env.*
+!.env.example
+server/.env
+server/.env.*
+!server/.env.example
+.cache/
+coverage/
+playwright-report/
+test-results/
+.superpowers/
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+# Local documents and generated files
+tmp/
+output/
+edited-date-2006*.png
+Shiwam_Resume.tex
