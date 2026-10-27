@@ -1,0 +1,92 @@
+name: Deploy PolicyDesk
+
+on:
+  workflow_run:
+    workflows: [Verify PolicyDesk]
+    branches: [main]
+    types: [completed]
+  workflow_dispatch:
+
+concurrency:
+  group: production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: [self-hosted, linux, x64, policydesk-production]
+    timeout-minutes: 20
+    env:
+      APP_NAME: policydesk
+      CLIENT_ORIGIN: https://3-105-28-84.sslip.io
+      ENV_FILE: /home/ubuntu/policydesk/server/.env
+      IMAGE: policydesk:${{ github.event.workflow_run.head_sha || github.sha }}
+
+    steps:
+      - name: Check out verified revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Check production configuration
+        run: test -s "$ENV_FILE"
+
+      - name: Build production image
+        run: docker build --pull --tag "$IMAGE" .
+
+      - name: Replace container and verify health
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          previous_image="$(docker inspect --format '{{.Config.Image}}' "$APP_NAME" 2>/dev/null || true)"
+
+          start_container() {
+            docker run --detach \
+              --name "$APP_NAME" \
+              --restart unless-stopped \
+              --env-file "$ENV_FILE" \
+              --env "CLIENT_ORIGIN=$CLIENT_ORIGIN" \
+              --env TRUST_PROXY=1 \
+              --publish 127.0.0.1:5001:5001 \
+              "$1"
+          }
+
+          rollback() {
+            docker logs --tail 100 "$APP_NAME" 2>/dev/null || true
+            docker rm --force "$APP_NAME" 2>/dev/null || true
+            if [[ -n "$previous_image" ]]; then
+              echo "Deployment failed; restoring $previous_image"
+              start_container "$previous_image"
+            fi
+          }
+
+          docker rm --force "$APP_NAME" 2>/dev/null || true
+          if ! start_container "$IMAGE"; then
+            rollback
+            exit 1
+          fi
+
+          healthy=false
+          for _ in {1..30}; do
+            if curl --fail --silent --show-error http://127.0.0.1:5001/api/health \
+              | grep --quiet '"status":"ok"'; then
+              healthy=true
+              break
+            fi
+            sleep 2
+          done
+
+          if [[ "$healthy" != true ]]; then
+            rollback
+            exit 1
+          fi
+
+          docker tag "$IMAGE" policydesk:latest
+          docker image prune --force
+          curl --fail --silent --show-error "$CLIENT_ORIGIN/api/health"

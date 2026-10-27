@@ -77,6 +77,22 @@ npm run lint
 npm run build
 ```
 
+## Production deployment
+
+The production site runs on an EC2 instance behind Nginx at
+`https://3-105-28-84.sslip.io`. Docker binds the Node.js service only to
+`127.0.0.1:5001`; ports 80 and 443 are served by Nginx.
+
+Every successful `Verify PolicyDesk` run on `main` triggers the deployment
+workflow on the production self-hosted runner. The workflow builds a revision-
+tagged image, starts it with the server's protected environment file, checks
+`/api/health`, and restores the previous image if the health check fails.
+
+The runner must have the `policydesk-production` label and run as a user with
+Docker access. The protected environment file remains on the server at
+`/home/ubuntu/policydesk/server/.env`; it is never stored in Git or a Docker
+image.
+
 ## Project structure
 
 ```text
