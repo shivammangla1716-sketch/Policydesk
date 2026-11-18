@@ -44,21 +44,33 @@ export function createTestAI() {
 export function createGeminiAI(config) {
   const embeddingModel = config.embeddingModel || 'gemini-embedding-001';
   const generationModel = config.generationModel || 'gemini-3.6-flash';
-  async function call(model, method, payload) {
+  const fallbackGenerationModel = config.fallbackGenerationModel || 'gemini-3.5-flash-lite';
+  async function call(model, method, payload, fallbackModels = []) {
     if (!config.geminiKey) throw new AppError(503, 'AI is not configured. Add GEMINI_API_KEY to server/.env.');
-    for (let attempt = 0; attempt < 3; attempt++) {
-      let response;
-      try {
-        response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:${method}`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': config.geminiKey },
-          body: JSON.stringify(payload), signal: AbortSignal.timeout(25000),
-        });
-      } catch { throw new AppError(502, 'The AI service took too long to respond. Please try again.'); }
-      if ((response.status === 429 || response.status >= 500) && attempt < 2) {
-        await new Promise(resolve => setTimeout(resolve, 500 * 2 ** attempt)); continue;
+    const models = [...new Set([model, ...fallbackModels].filter(Boolean))];
+    for (let modelIndex = 0; modelIndex < models.length; modelIndex++) {
+      const currentModel = models[modelIndex];
+      const attempts = models.length > 1 ? 1 : 3;
+      for (let attempt = 0; attempt < attempts; attempt++) {
+        let response;
+        try {
+          response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${currentModel}:${method}`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': config.geminiKey },
+            body: JSON.stringify(payload), signal: AbortSignal.timeout(25000),
+          });
+        } catch {
+          if (modelIndex < models.length - 1) break;
+          throw new AppError(502, 'The AI service took too long to respond. Please try again.');
+        }
+        const retryable = response.status === 429 || response.status >= 500;
+        if (retryable && attempt < attempts - 1) {
+          await new Promise(resolve => setTimeout(resolve, 500 * 2 ** attempt));
+          continue;
+        }
+        if (retryable && modelIndex < models.length - 1) break;
+        if (!response.ok) throw new AppError(response.status === 429 ? 429 : 502, response.status === 429 ? 'AI usage limit reached. Please try again shortly.' : 'The AI service could not complete this request. Check the server’s model and API key settings.');
+        return response.json();
       }
-      if (!response.ok) throw new AppError(response.status === 429 ? 429 : 502, response.status === 429 ? 'AI usage limit reached. Please try again shortly.' : 'The AI service could not complete this request. Check the server’s model and API key settings.');
-      return response.json();
     }
   }
   return {
@@ -76,7 +88,7 @@ export function createGeminiAI(config) {
         systemInstruction: { parts: [{ text: instructions }] },
         contents: [{ role: 'user', parts: [{ text: JSON.stringify({ question, history: history.map(m => ({ role: m.role, text: m.text })), sources: sources.map((s, i) => ({ number: i + 1, title: s.title, section: s.section, text: s.text })) }) }] }],
         generationConfig: { temperature: 0.15, maxOutputTokens: 1800, responseMimeType: 'application/json' },
-      });
+      }, [fallbackGenerationModel]);
       try {
         const parsed = JSON.parse(data.candidates?.[0]?.content?.parts?.map(p => p.text || '').join('') || '{}');
         return normalizeGeneratedAnswer(parsed, sources.length);
